@@ -1,4 +1,4 @@
-name: Ruby
+name: CI
 
 on:
   push:
@@ -11,22 +11,89 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
+    name: ${{ matrix.lane }} (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest
-    name: Ruby ${{ matrix.ruby }}
+
+    container: ruby:${{ matrix.ruby }}
+
     strategy:
+      fail-fast: false
       matrix:
-        ruby:
-          - '3.4.1'
+        include:
+          - lane: rails-6.1
+            gemfile: rails_6.1
+            audit_soft_fail: true
+            ruby: "3.0.7"
+            bundler: "2.4.22"
+          - lane: rails-7.1
+            gemfile: rails_7.1
+            audit_soft_fail: true
+            ruby: "3.0.7"
+            bundler: "2.4.22"
+          - lane: rails-8.0
+            gemfile: rails_8.0
+            audit_soft_fail: false
+            ruby: "3.4.6"
+            bundler: "4.0.19"
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sidekiq_batch_jobs_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      REDIS_URL: redis://redis:6379/0
+      BUNDLE_PATH: vendor/bundle
+      BUNDLE_GEMFILE: gemfiles/${{ matrix.gemfile }}.gemfile
 
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache gems
+        uses: actions/cache@v4
         with:
-          ruby-version: ${{ matrix.ruby }}
-          bundler-cache: true
-      - name: Run the default task
+          path: vendor/bundle
+          key: ${{ runner.os }}-${{ matrix.lane }}-${{ hashFiles(format('gemfiles/{0}.gemfile.lock', matrix.gemfile)) }}
+          restore-keys: ${{ runner.os }}-${{ matrix.lane }}-
+
+      - name: Install bundler
+        run: gem install bundler -v "${{ matrix.bundler }}" --no-document
+
+      - name: Install gems
+        run: bundle install --jobs 4 --retry 3
+
+      - name: Run the default task (rspec + rubocop)
         run: bundle exec rake
+
+      - name: Audit dependencies
+        run: bundle exec rake audit
+        continue-on-error: ${{ matrix.audit_soft_fail }}
+
+      - name: Build the gem
+        run: gem build sidekiq-batch-jobs.gemspec

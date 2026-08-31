@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Interactive shell in a lane.
+#
+#   bin/shell              rails-6.1 (default)
+#   bin/shell rails-8.0    Rails 8.0 on the Ruby 3.4 image
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+lane="${1:-rails-6.1}"
+
+case "$lane" in
+  rails-8.0) service="gem-ruby34" ;;
+  *)         service="gem" ;;
+esac
+
+exec docker compose run --rm -e BUNDLE_GEMFILE="/gem/gemfiles/${lane//-/_}.gemfile" "$service" bash

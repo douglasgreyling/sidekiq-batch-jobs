@@ -15,33 +15,53 @@
 #  updated_at       :datetime         not null
 #  sidekiq_batch_id :bigint           not null
 #
-class SidekiqBatchJob < ActiveRecord::Base
-  ERROR_MESSAGE_MAX = 4_000
+class SidekiqBatchJob < ::Sidekiq::Batch::Jobs.base_class
+  extend ::Sidekiq::Batch::Jobs::EnumCompat
 
-  enum :status, { pending: 0, complete: 1, failed: 2 }, suffix: :status
+  status_enum(pending: 0, complete: 1, failed: 2)
 
   belongs_to :sidekiq_batch
 
-  validates :jid, presence: true, uniqueness: true
+  # jid uniqueness is left to the unique index. The validation's SELECT was
+  # never a guarantee — two enrolling threads can both pass it and race to the
+  # INSERT — and it cost a query on every enrolled job.
+  validates :jid, presence: true
   validates :worker_class, presence: true
 
-  # Idempotent: returns true if the row was transitioned from `pending`
-  # to `complete`; false if it was already terminal.
-  def mark_complete!
-    self.class.where(id: id, status: "pending").update_all(
-      status:     self.class.statuses.fetch("complete"),
-      updated_at: Time.current
-    ).positive?
+  class << self
+    def complete!(jid)
+      transition(jid, "complete")
+    end
+
+    def fail!(jid, error)
+      transition(jid, "failed", error_attributes(error))
+    end
+
+    def batch_ids_active_since(cutoff)
+      where(updated_at: cutoff..).select(:sidekiq_batch_id)
+    end
+
+    private
+
+    def transition(jid, to, extra = {})
+      where(jid: jid, status: "pending").update_all(
+        { status: statuses.fetch(to), updated_at: Time.current }.merge(extra)
+      ).positive?
+    end
+
+    def error_attributes(error)
+      {
+        error_class:   error.class.name,
+        error_message: error.message.to_s.truncate(::Sidekiq::Batch::Jobs.config.error_message_max)
+      }
+    end
   end
 
-  # Idempotent: returns true if the row was transitioned from `pending`
-  # to `failed`; false if it was already terminal.
+  def mark_complete!
+    self.class.complete!(jid)
+  end
+
   def mark_failed!(error)
-    self.class.where(id: id, status: "pending").update_all(
-      status:        self.class.statuses.fetch("failed"),
-      error_class:   error.class.name,
-      error_message: error.message.to_s.truncate(ERROR_MESSAGE_MAX),
-      updated_at:    Time.current
-    ).positive?
+    self.class.fail!(jid, error)
   end
 end

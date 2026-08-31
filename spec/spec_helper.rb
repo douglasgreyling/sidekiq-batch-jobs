@@ -2,6 +2,12 @@
 
 ENV["RAILS_ENV"] ||= "test"
 
+# concurrent-ruby 1.3.5 dropped its implicit `require "logger"`, which Rails
+# < 7.1 relied on. Without this, booting Rails 6.1 dies on `uninitialized
+# constant ActiveSupport::LoggerThreadSafeLevel::Logger`. Drop it once the
+# minimum supported Rails is 7.1.
+require "logger"
+
 require "combustion"
 
 Combustion.path = "spec/internal"
@@ -34,6 +40,8 @@ RSpec.configure do |config|
   end
 
   config.include FactoryBot::Syntax::Methods
+  # travel_to, for the throughput-based #eta examples.
+  config.include ActiveSupport::Testing::TimeHelpers
 
   # Use deletion (not the AR transactional wrapper) so the multi-thread
   # concurrency spec works — worker threads have their own connections and
@@ -42,7 +50,7 @@ RSpec.configure do |config|
   config.before(:suite) do
     FactoryBot.find_definitions
     DatabaseCleaner.allow_remote_database_url = true
-    DatabaseCleaner.strategy = :deletion
+    DatabaseCleaner.strategy                  = :deletion
     DatabaseCleaner.clean_with(:deletion)
   end
 

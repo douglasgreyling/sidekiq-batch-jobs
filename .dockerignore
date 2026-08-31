@@ -1,0 +1,9 @@
+.git
+.bundle
+.ruby-lsp
+coverage
+doc
+pkg
+tmp
+spec/internal/log/*.log
+spec/internal/tmp
