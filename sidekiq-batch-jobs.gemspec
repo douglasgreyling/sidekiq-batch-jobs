@@ -16,33 +16,44 @@ Gem::Specification.new do |spec|
   DESC
   spec.homepage              = "https://github.com/douglasgreyling/sidekiq-batch-jobs"
   spec.license               = "MIT"
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 3.0.0"
 
   spec.metadata["homepage_uri"]          = spec.homepage
   spec.metadata["source_code_uri"]       = spec.homepage
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  gemspec            = File.basename(__FILE__)
-  spec.files         = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
+  # Development-only paths. Everything else git tracks is packaged, so a new
+  # source file ships as soon as it is committed — and packaging_spec.rb fails if
+  # one is written but never added.
+  gemspec_file = File.basename(__FILE__)
+  dev_only     = %w[
+    .dockerignore
+    .github/
+    .gitignore
+    .rspec
+    .rubocop.yml
+    Appraisals
+    Dockerfile
+    Gemfile
+    ROADMAP.md
+    bin/
+    docker-compose.yml
+    docker/
+    gemfiles/
+    spec/
+  ].freeze
+
+  spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
     ls.readlines("\x0", chomp: true).reject do |f|
-      (f == gemspec) ||
-        f.start_with?(*%w[bin/ Gemfile .gitignore .rspec spec/ .github/ .rubocop.yml])
+      f == gemspec_file || f.start_with?(*dev_only)
     end
   end
+
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "activerecord", "~> 7.1.0"
-  spec.add_dependency "railties", "~> 7.1.0"
+  spec.add_dependency "activerecord", ">= 6.1", "< 9"
+  spec.add_dependency "railties", ">= 6.1", "< 9"
   spec.add_dependency "sidekiq", ">= 7.0", "< 9"
-
-  spec.add_development_dependency "combustion", "~> 1.4"
-  spec.add_development_dependency "concurrent-ruby", "~> 1.2"
-  spec.add_development_dependency "database_cleaner-active_record", "~> 2.2"
-  spec.add_development_dependency "factory_bot", "~> 6.4"
-  spec.add_development_dependency "pg", "~> 1.5"
-  spec.add_development_dependency "rspec-rails", "~> 6.1"
-  spec.add_development_dependency "rspec-sidekiq", "~> 5.0"
-  spec.add_development_dependency "shoulda-matchers", "~> 6.0"
 end

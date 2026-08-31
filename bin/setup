@@ -1,8 +1,27 @@
 #!/usr/bin/env bash
+# Build both images and resolve every Appraisal lane. Run once after cloning,
+# and again whenever the Dockerfile, the Gemfile or Appraisals changes.
+
 set -euo pipefail
-IFS=$'\n\t'
-set -vx
 
-bundle install
+cd "$(dirname "$0")/.."
 
-# Do any other automated setup that you need to do here
+docker compose build gem gem-ruby34
+
+# Regenerate gemfiles/ from Appraisals, then resolve each lane on a Ruby that
+# can actually run it.
+docker compose run --rm -e BUNDLE_GEMFILE=/gem/Gemfile gem bundle install
+docker compose run --rm -e BUNDLE_GEMFILE=/gem/Gemfile gem bundle exec appraisal generate
+
+for lane in rails_6.1 rails_7.1; do
+  echo
+  echo "════════ resolving ${lane} (Ruby 3.0.7) ════════"
+  docker compose run --rm -e BUNDLE_GEMFILE="/gem/gemfiles/${lane}.gemfile" gem bundle install
+done
+
+echo
+echo "════════ resolving rails_8.0 (Ruby 3.4.6) ════════"
+docker compose run --rm gem-ruby34 bundle install
+
+echo
+echo "Done. Run the suite with: bin/test  (or bin/test --all)"

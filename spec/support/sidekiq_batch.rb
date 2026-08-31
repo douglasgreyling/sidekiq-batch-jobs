@@ -65,11 +65,29 @@ class SidekiqBatchTestFailureJob
   end
 end
 
+# For the `complete` event, which fires whatever the outcome.
+class SidekiqBatchTestAlwaysJob
+  include Sidekiq::Worker
+
+  def self.fired
+    @fired ||= []
+  end
+
+  def self.reset!
+    @fired = []
+  end
+
+  def perform(batch_id)
+    self.class.fired << batch_id
+  end
+end
+
 RSpec.configure do |config|
   config.before do
     Sidekiq::Worker.clear_all
     SidekiqBatchTestFanInJob.reset!
     SidekiqBatchTestFailureJob.reset!
+    SidekiqBatchTestAlwaysJob.reset!
 
     Thread.current[SidekiqBatch::BatchEnrollmentContext::TXN_BASELINE] =
       ActiveRecord::Base.connection.open_transactions

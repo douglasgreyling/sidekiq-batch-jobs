@@ -8,7 +8,16 @@ RSpec.describe SidekiqBatchJob, type: :model do
   it { is_expected.to belong_to(:sidekiq_batch) }
   it { is_expected.to validate_presence_of(:jid) }
   it { is_expected.to validate_presence_of(:worker_class) }
-  it { is_expected.to validate_uniqueness_of(:jid) }
+
+  # Asserts the guarantee that actually holds. The uniqueness *validation* only
+  # ever confirmed a declaration; the unique index is what stops a duplicate
+  # landing, and it holds against concurrent enrollers too.
+  it "rejects a duplicate jid at the database level" do
+    existing = create(:sidekiq_batch_job)
+
+    expect { create(:sidekiq_batch_job, jid: existing.jid) }
+      .to raise_error(ActiveRecord::RecordNotUnique)
+  end
 
   describe "#mark_complete!" do
     let(:job) { create(:sidekiq_batch_job) }
@@ -56,7 +65,7 @@ RSpec.describe SidekiqBatchJob, type: :model do
 
       job.mark_failed!(huge)
 
-      expect(job.reload.error_message.length).to eq(described_class::ERROR_MESSAGE_MAX)
+      expect(job.reload.error_message.length).to eq(Sidekiq::Batch::Jobs.config.error_message_max)
     end
   end
 end

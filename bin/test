@@ -1,22 +1,40 @@
 #!/usr/bin/env bash
-# Wrapper that ensures Postgres is up before running rspec.
+# Run the suite in one of the Appraisal lanes (see Appraisals).
 #
-# Usage:
-#   bin/test                  # run the full suite
-#   bin/test spec/models      # pass args through to rspec
+#   bin/test                     rails-6.1, the extraction target (default)
+#   bin/test spec/models         args pass through to rspec
+#   bin/test --lane rails-7.1    Rails 7.1, same Ruby 3.0 image
+#   bin/test --lane rails-8.0    Rails 8.0, needs the Ruby 3.4 image
+#   bin/test --all               every lane, in order
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if ! docker compose ps --status running --services 2>/dev/null | grep -q '^postgres$'; then
-  echo "→ Starting Postgres via docker compose…"
-  docker compose up -d postgres
-fi
+LANES=(rails-6.1 rails-7.1 rails-8.0)
+lane="${LANE:-rails-6.1}"
 
-echo "→ Waiting for Postgres to accept connections…"
-until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do
-  sleep 0.5
-done
+case "${1:-}" in
+  --lane) lane="$2"; shift 2 ;;
+  --all)
+    shift
+    status=0
+    for l in "${LANES[@]}"; do
+      echo
+      echo "════════ lane: ${l} ════════"
+      LANE="$l" "$0" "$@" || status=$?
+    done
+    exit "$status"
+    ;;
+esac
 
-exec bundle exec rspec "$@"
+# Rails 8 and Sidekiq 8 both need Ruby >= 3.2, so that lane runs on the second
+# image. Everything else runs on the Ruby 3.0.7 one.
+case "$lane" in
+  rails-8.0) service="gem-ruby34" ;;
+  *)         service="gem" ;;
+esac
+
+gemfile="/gem/gemfiles/${lane//-/_}.gemfile"
+
+exec docker compose run --rm -e BUNDLE_GEMFILE="$gemfile" "$service" bundle exec rspec "$@"
