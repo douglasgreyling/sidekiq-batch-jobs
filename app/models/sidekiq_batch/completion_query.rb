@@ -9,9 +9,7 @@ class SidekiqBatch
       def sql
         <<~SQL.squish
           UPDATE sidekiq_batches
-          SET status       = #{outcome},
-              completed_at = NOW(),
-              updated_at   = NOW()
+          SET #{assignments}
           WHERE id = ?
             AND status = #{batch_status("running")}
             AND NOT EXISTS (#{jobs_with(job_status("pending"))})
@@ -20,6 +18,15 @@ class SidekiqBatch
       end
 
       private
+
+      def assignments
+        <<~SQL
+          status                         = #{outcome},
+          (complete_count, failed_count) = (#{final_counts}),
+          completed_at                   = NOW(),
+          updated_at                     = NOW()
+        SQL
+      end
 
       def outcome
         <<~SQL
@@ -60,6 +67,25 @@ class SidekiqBatch
 
       def tolerance
         "GREATEST(COALESCE(failure_tolerance, 0), 0)"
+      end
+
+      # The tally the batch keeps once it is finished, so reading its progress
+      # later costs no job rows at all. Free of the contention a per-job counter
+      # would buy: this statement's WHERE matches nothing until the last job
+      # lands, so it runs once per batch and takes the row lock once. Nothing
+      # can drift either, since a terminal batch transitions no further jobs.
+      #
+      # One multi-column assignment rather than two scalar subqueries, so the
+      # batch's rows are walked once for both numbers. The CASE in `status`
+      # cannot read them: every SET expression sees the pre-UPDATE row, which is
+      # why the tolerating branch below keeps a count of its own.
+      def final_counts
+        <<~SQL
+          SELECT COUNT(*) FILTER (WHERE status = #{job_status("complete")}),
+                 COUNT(*) FILTER (WHERE status = #{job_status("failed")})
+          FROM sidekiq_batch_jobs
+          WHERE sidekiq_batch_id = sidekiq_batches.id
+        SQL
       end
 
       def failed_count

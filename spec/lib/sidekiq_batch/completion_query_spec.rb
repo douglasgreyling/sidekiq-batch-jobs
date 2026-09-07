@@ -15,6 +15,30 @@ RSpec.describe SidekiqBatch::CompletionQuery do
     batch.attempt_completion!
   end
 
+  describe "the tally it stamps" do
+    it "records the final counts on the batch it transitions" do
+      batch = create(:sidekiq_batch, :running, total_jobs: 5)
+
+      create_list(:sidekiq_batch_job, 3, :complete, sidekiq_batch: batch)
+      create_list(:sidekiq_batch_job, 2, :failed,   sidekiq_batch: batch)
+
+      expect(batch.attempt_completion!).to eq("failed")
+      expect(batch.complete_count).to eq(3)
+      expect(batch.failed_count).to eq(2)
+    end
+
+    it "writes nothing while a job is still pending" do
+      batch = create(:sidekiq_batch, :running, total_jobs: 2)
+
+      create(:sidekiq_batch_job, :complete, sidekiq_batch: batch)
+      create(:sidekiq_batch_job,            sidekiq_batch: batch)
+
+      expect(batch.attempt_completion!).to be_nil
+      expect(batch.reload.complete_count).to be_nil
+      expect(batch.failed_count).to be_nil
+    end
+  end
+
   describe "any_failure, the default" do
     it "succeeds when every job succeeded" do
       expect(outcome_of(complete: 3, failed: 0)).to eq("succeeded")

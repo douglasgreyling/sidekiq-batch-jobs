@@ -119,6 +119,27 @@ RSpec.describe SidekiqBatch, type: :model do
     it "returns counts by status plus total" do
       expect(batch.progress).to eq(total: 3, complete: 1, failed: 1, pending: 1)
     end
+
+    context "once the batch has finished" do
+      before do
+        batch.pending_jobs.first.mark_complete!
+        batch.attempt_completion!
+      end
+
+      it "reports the tally the completion statement stamped" do
+        expect(batch.progress).to eq(total: 3, complete: 2, failed: 1, pending: 0)
+      end
+
+      it "reads it off the batch row rather than counting job rows" do
+        expect(count_queries { batch.progress }).to eq(0)
+      end
+
+      it "falls back to counting when no tally was stamped" do
+        batch.update_columns(complete_count: nil, failed_count: nil)
+
+        expect(batch.progress).to eq(total: 3, complete: 2, failed: 1, pending: 0)
+      end
+    end
   end
 
   describe "#percentage_progress" do
@@ -147,6 +168,13 @@ RSpec.describe SidekiqBatch, type: :model do
       create(:sidekiq_batch_job, :complete, sidekiq_batch: batch)
 
       expect(batch.percentage_progress).to eq(33.33)
+    end
+
+    it "is 100.0 for a finished batch without asking the database" do
+      batch = create(:sidekiq_batch, status: "succeeded", total_jobs: 1_000, completed_at: Time.current)
+
+      expect(count_queries { batch.percentage_progress }).to eq(0)
+      expect(batch.percentage_progress).to eq(100.0)
     end
   end
 

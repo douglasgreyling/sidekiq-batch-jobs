@@ -2,6 +2,7 @@
 
 require "sidekiq"
 require_relative "jobs/version"
+require_relative "jobs/schema"
 require_relative "jobs/enum_compat"
 require_relative "jobs/failure_policy"
 require_relative "jobs/configuration"
