@@ -5,6 +5,58 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-07
+
+### Breaking
+
+- **A migration is required, and the new code does not work without it.** The completion
+  statement writes both new columns, so against an unmigrated database every completion check
+  raises `PG::UndefinedColumn` and `#progress` raises `NameError` on a finished batch. See
+  *Upgrading from 0.2.0* below.
+
+### Added
+
+- `complete_count` and `failed_count` on `sidekiq_batches`, stamped by the completion statement
+  in the same `UPDATE` that transitions the batch. `#progress` reads them back, so a finished
+  batch reports its counts without touching a job row, and `#percentage_progress` now answers
+  100.0 from the status alone: a batch only transitions once nothing is pending, so a terminal
+  one has nothing left to count. A running batch counts rows exactly as before, so polling a
+  live batch is unchanged.
+
+  Written once, by the statement that already runs once per batch, rather than bumped from
+  `complete!` and `fail!`. A per-job counter would serialise every worker in a batch behind a
+  single row lock and churn a tuple per job, to speed up reads that were never on the hot path.
+  The completion statement takes that lock anyway, and a terminal batch transitions no further
+  jobs, so the tally cannot drift from the rows.
+
+- `rails g sidekiq:batch:jobs:upgrade`, which replaces the copy-paste migration these notes
+  used to hand you. It reads your tables and emits only what they are missing, so upgrading
+  from 0.1.0 and upgrading from 0.2.0 are the same command and each writes the migration that
+  applies. Nothing to do means no file, so it is safe to run against a current database, and
+  safe to run twice. `Sidekiq::Batch::Jobs::Schema` is the schema it diffs against.
+
+### Upgrading from 0.2.0
+
+```bash
+bin/rails g sidekiq:batch:jobs:upgrade
+bin/rails db:migrate
+```
+
+Two nullable columns, which on Postgres 11+ is a metadata-only change however large the table.
+
+Run it before the workers pick up the new code, not after. The completion statement names both
+columns, so until they exist every completion check fails.
+
+Nothing is lost if that order slips. The failure is caught where every completion check is
+caught: the job itself still succeeds, the batch keeps its rows and stays `running`, and the
+reason goes to `config.on_alert`. Once the columns exist, the next job to finish transitions
+its batch normally, and `SidekiqBatch::ReaperWorker` completes any batch whose last job already
+ran, once it has been quiet for `config.stuck_after` (two hours by default).
+
+No backfill. NULL means "no tally was stamped", which is every running batch and every batch
+that finished under 0.2.0; both fall back to counting job rows the way 0.2.0 always did.
+Batches that finish after the migration carry their own counts.
+
 ## [0.2.0] - 2026-08-31
 
 0.1.0 could enrol a batch, detect completion and fire a callback. This release keeps that core

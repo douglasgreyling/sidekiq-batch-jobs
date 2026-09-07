@@ -5,6 +5,8 @@ ActiveRecord::Schema.define do
     t.string   :description
     t.integer  :status,            null: false, default: 0
     t.integer  :total_jobs,        null: false, default: 0
+    t.integer  :complete_count
+    t.integer  :failed_count
     t.jsonb    :callbacks,         null: false, default: {}
     t.jsonb    :callbacks_fired,   null: false, default: {}
     t.jsonb    :context,           null: false, default: {}

@@ -9,6 +9,7 @@ Tested against Ruby 3.0–3.4, Rails 6.1–8.0, Sidekiq 7–8.
 ## Contents
 
 - [Installation](#installation)
+  - [Upgrading an existing install](#upgrading-an-existing-install)
   - [Configuration](#configuration)
 - [Usage](#usage)
   - [The four steps](#the-four-steps)
@@ -52,6 +53,26 @@ death handler for you at boot, and again after every code reload.
 **Run batched jobs in a real Sidekiq process.** An embedded processor
 (`Sidekiq.configure_embed`) never runs this gem's server middleware, so its jobs stay
 `pending` even when they succeed, and the reaper eventually marks them failed.
+
+### Upgrading an existing install
+
+Some releases add columns. Rather than a migration per release for you to apply in order,
+there is one command that reads your tables and writes only what they are missing:
+
+```bash
+bin/rails g sidekiq:batch:jobs:upgrade
+bin/rails db:migrate
+```
+
+It works from any earlier version, and writes no file at all when your schema is already
+current, so it is safe to run whenever a release mentions the schema, and safe to run twice.
+Read the migration before you run it, as you would any generated one. Do not use the install
+generator for this: that one builds the tables from scratch.
+
+Run it **before** the new code reaches your workers. The gem's SQL names every column it
+expects, so between deploying and migrating, completion checks fail. Nothing is lost if that
+order slips: the failure goes to `config.on_alert`, jobs still run, batches keep their rows,
+and everything stalled completes once the migration lands.
 
 ### Configuration
 
@@ -316,6 +337,8 @@ batch.status            # "pending" | "running" | "succeeded" | "failed"
 batch.terminal?         # true once the batch has finished, either way
 batch.completed_at      # nil until the batch finishes
 batch.total_jobs        # stamped when the jobs {} block returns; 0 before that
+batch.complete_count    # the final tally, stamped when the batch finishes;
+batch.failed_count      # both nil while it is still running
 batch.context           # the jsonb hash you stashed when creating the batch
 
 batch.failure_policy    # "any_failure" | "all_failed" | "tolerate_jobs" | "tolerate_percent"
@@ -325,6 +348,19 @@ batch.enrollment_error  # nil normally; {"class" =>, "message" =>} if the
                         # jobs {} block never finished enqueueing
 batch.callbacks_fired   # event => when that callback went out
 ```
+
+**Reading a finished batch costs nothing.** The completion statement stamps `complete_count`
+and `failed_count` in the same `UPDATE` that transitions the batch, so `progress` on a terminal
+batch reads two attributes instead of counting job rows, and `percentage_progress` answers
+100.0 from the status alone: a batch only transitions once nothing is pending, so there is
+nothing left to count. This matters most where you are most likely to look, which is from
+inside a callback on a batch that just finished.
+
+Those are the only two places the numbers are written. Bumping a counter from `complete!` and
+`fail!` would put every worker in the batch behind one row lock and write a new version of the
+batch row per job, all to speed up a read that is not on the hot path. The completion statement
+takes that lock once per batch anyway, and a terminal batch transitions no further jobs, so its
+tally cannot drift. A batch that is still running counts rows, exactly as before.
 
 Each enrolled job has a row of its own:
 

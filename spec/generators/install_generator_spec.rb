@@ -71,6 +71,9 @@ RSpec.describe Sidekiq::Batch::Jobs::Generators::InstallGenerator do
     expect(migration).to include("t.integer  :failure_tolerance")
     # Set when a jobs {} block never finished; forces failure whatever the policy.
     expect(migration).to include("t.jsonb    :enrollment_error")
+    # Stamped by the completion statement; #progress reads them back.
+    expect(migration).to include("t.integer  :complete_count")
+    expect(migration).to include("t.integer  :failed_count")
     expect(migration).to include("t.jsonb    :callbacks_fired,   null: false, default: {}")
   end
 

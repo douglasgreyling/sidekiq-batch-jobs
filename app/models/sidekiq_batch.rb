@@ -8,10 +8,12 @@
 #  callback_fired_at :datetime
 #  callbacks         :jsonb            not null
 #  callbacks_fired   :jsonb            not null
+#  complete_count    :integer
 #  completed_at      :datetime
 #  context           :jsonb            not null
 #  description       :string
 #  enrollment_error  :jsonb
+#  failed_count      :integer
 #  failure_policy    :string
 #  failure_tolerance :integer
 #  status            :integer          default("pending"), not null
@@ -112,6 +114,8 @@ class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
   def percentage_progress
     return 0.0 if total_jobs.zero?
 
+    return 100.0 if terminal?
+
     ((finished_jobs_count.to_f / total_jobs) * 100).round(2)
   end
 
@@ -131,14 +135,7 @@ class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
   end
 
   def progress
-    counts = sidekiq_batch_jobs.group(:status).count
-
-    {
-      total:    total_jobs,
-      complete: counts.fetch("complete", 0),
-      failed:   counts.fetch("failed", 0),
-      pending:  counts.fetch("pending", 0)
-    }
+    stamped_counts || count_by_status
   end
 
   def pending_jobs
@@ -190,6 +187,23 @@ class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
     elsif failure_tolerance.present?
       errors.add(:failure_tolerance, "only applies to a tolerating policy")
     end
+  end
+
+  def stamped_counts
+    return nil unless terminal? && complete_count && failed_count
+
+    { total: total_jobs, complete: complete_count, failed: failed_count, pending: 0 }
+  end
+
+  def count_by_status
+    counts = sidekiq_batch_jobs.group(:status).count
+
+    {
+      total:    total_jobs,
+      complete: counts.fetch("complete", 0),
+      failed:   counts.fetch("failed", 0),
+      pending:  counts.fetch("pending", 0)
+    }
   end
 
   def finished_jobs_count

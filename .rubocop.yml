@@ -40,8 +40,10 @@ Layout/ParameterAlignment:
 # Max is nudged past the default 100: SidekiqBatch carries both the record and
 # the class-level completion entry point, which exists so the hot path can run
 # the completion UPDATE without loading a batch it will usually not transition.
+# It also answers progress three ways from two sources, since a finished batch
+# reads the tally on its own row and a running one counts job rows.
 Metrics/ClassLength:
-  Max: 110
+  Max: 120
   CountAsOne:
     - heredoc
 
