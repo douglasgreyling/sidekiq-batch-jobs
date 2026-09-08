@@ -63,6 +63,45 @@ RSpec.describe SidekiqBatch::JidIndex do
     expect(described_class.call).to include(jid)
   end
 
+  # Guards the fixture rather than the code. If `payload` is ever written back
+  # as a nested Hash, the example above passes again while production stays
+  # broken, which is exactly how a wrong read of this branch survived to 0.3.0.
+  it "is set up the way a real Sidekiq process writes it, with payload a JSON string" do
+    register_running_job("runningjid000000000000001")
+
+    _process_id, _thread_id, work = Sidekiq::WorkSet.new.first
+
+    expect(work.payload).to be_a(String)
+  end
+
+  # The specific way it broke: `payload["jid"]` on that string is String
+  # indexing, so it finds the key *name* in the JSON and returns the literal
+  # "jid" for every job on the cluster. The index filled with one constant, so
+  # no executing job was ever found in it and StuckJobReaper failed rows whose
+  # jobs were running perfectly well.
+  it "never collects the literal string 'jid'" do
+    register_running_job("runningjid000000000000001")
+
+    expect(described_class.call).not_to include("jid")
+  end
+
+  # Sidekiq yielded a raw Hash here until 7.3 and a Sidekiq::Work since, and
+  # the gemspec supports from 7.0. The old shape cannot be produced against the
+  # Sidekiq this suite resolves, so this is the one place a stub earns its keep:
+  # the alternative is shipping an untested branch for versions we promise.
+  it "reads the pre-7.3 shape, where WorkSet yields a raw Hash" do
+    jid = "runningjid000000000000001"
+    raw = { "queue"   => "default",
+            "run_at"  => Time.now.to_i,
+            "payload" => Sidekiq.dump_json(payload_for(jid)) }
+
+    work_set = instance_double(Sidekiq::WorkSet)
+    allow(Sidekiq::WorkSet).to receive(:new).and_return(work_set)
+    allow(work_set).to receive(:each).and_yield("host:1:abcdef", "tid-1", raw)
+
+    expect(described_class.call).to include(jid)
+  end
+
   it "does not invent jids that are nowhere in Sidekiq" do
     SidekiqBatchTestWorker.perform_async(1)
 
@@ -86,11 +125,19 @@ RSpec.describe SidekiqBatch::JidIndex do
 
     Sidekiq.redis do |conn|
       conn.sadd("processes", [process_key])
-      conn.hset(
-        "#{process_key}:work",
-        "tid-1",
-        Sidekiq.dump_json("queue" => "default", "run_at" => Time.now.to_i, "payload" => payload_for(jid))
-      )
+      conn.hset("#{process_key}:work", "tid-1", work_entry_for(jid))
     end
+  end
+
+  # `payload` is a JSON *string*, not a nested object. Straight from the
+  # processor: `WORK_STATE.set(tid, {queue:, payload: jobstr, run_at:})`, where
+  # `jobstr` is the job as it came off the queue. Nesting a Hash here instead is
+  # what let a broken read of this branch pass for three releases.
+  def work_entry_for(jid)
+    Sidekiq.dump_json(
+      "queue"   => "default",
+      "run_at"  => Time.now.to_i,
+      "payload" => Sidekiq.dump_json(payload_for(jid))
+    )
   end
 end
