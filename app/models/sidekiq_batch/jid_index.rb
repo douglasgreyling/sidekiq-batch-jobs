@@ -34,12 +34,28 @@ class SidekiqBatch
     end
     private_class_method :add_sorted_sets
 
+    # Two shapes to survive here, and reading either one naively is silently
+    # wrong rather than loud.
+    #
+    # `payload` holds the job as a JSON *string*, not a nested object: the
+    # processor stores `{queue:, payload: jobstr, run_at:}`. So `payload["jid"]`
+    # is String indexing, which finds the key *name* in the JSON and returns the
+    # literal "jid" for every job on the cluster. The index fills with one
+    # constant, no executing job is ever found in it, and StuckJobReaper fails
+    # rows whose jobs are running perfectly well.
+    #
+    # The container around it moved too: WorkSet yielded a raw Hash until 7.3,
+    # and a Sidekiq::Work since. This gem supports both.
+    #
+    # JobRecord is Sidekiq's own reader for a job, and normalises the string and
+    # hash forms of a payload the same way `Sidekiq::Work#job` does.
     def self.add_executing(jids)
-      # `Sidekiq::Work` is a class, not a Hash — `#payload` is the supported
-      # accessor. Hash-style access still works through method_missing, but
-      # Sidekiq deprecated it.
-      ::Sidekiq::Workers.new.each do |_process_id, _thread_id, work|
-        jid = work.payload["jid"]
+      ::Sidekiq::WorkSet.new.each do |_process_id, _thread_id, work|
+        payload = work.respond_to?(:payload) ? work.payload : work["payload"]
+
+        next unless payload
+
+        jid = ::Sidekiq::JobRecord.new(payload).jid
 
         jids << jid if jid
       end

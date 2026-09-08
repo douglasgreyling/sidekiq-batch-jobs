@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-08
+
+### Fixed
+
+- **The reaper could fail jobs that were still running.** `JidIndex` read an executing job's id
+  as `work.payload["jid"]`, but `payload` holds the job as a JSON *string* rather than a nested
+  object, so that expression is String indexing: it finds the key *name* in the JSON and returns
+  the literal `"jid"`, for every job on the cluster. The live-jid index filled with a single
+  constant, no executing job was ever found in it, and `StuckJobReaper` marked rows orphaned
+  whose jobs were running perfectly well. Unrecoverable once it happened, since the job's own
+  `complete!` then finds the row no longer pending and leaves it failed.
+
+  Reaching it took a batch quiet for `stuck_after` (two hours by default), so the exposure was
+  long-running jobs, which is much of what batches are for. Present since 0.1.0.
+
+  The example covering this branch built its Redis fixture with a nested Hash, a shape no
+  Sidekiq version writes, so it passed throughout. It now writes the string form, alongside one
+  example pinning that shape and one asserting the literal `"jid"` never reaches the index.
+
+- **`JidIndex` raised `NoMethodError` on Sidekiq 7.0 to 7.2.** `WorkSet` yielded a raw Hash
+  until 7.3 and a `Sidekiq::Work` since, and the code called `#payload` on whatever it got. The
+  gemspec has always allowed `sidekiq >= 7.0`, and every CI lane resolves 7.3 or newer, so no
+  lane exercised the older shape. Both are now read through `Sidekiq::JobRecord`, which
+  normalises the string and hash forms the way `Sidekiq::Work#job` does.
+
+No schema change, so nothing to migrate.
+
 ## [0.3.0] - 2026-09-07
 
 ### Breaking
