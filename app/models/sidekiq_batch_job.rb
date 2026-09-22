@@ -16,9 +16,8 @@
 #  sidekiq_batch_id :bigint           not null
 #
 class SidekiqBatchJob < ::Sidekiq::Batch::Jobs.base_class
-  extend ::Sidekiq::Batch::Jobs::EnumCompat
-
-  status_enum(pending: 0, complete: 1, failed: 2)
+  # Positional, with `suffix:`, because ActiveRecord 8 accepts no other form.
+  enum :status, { pending: 0, complete: 1, failed: 2 }, suffix: :status
 
   belongs_to :sidekiq_batch
 

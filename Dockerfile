@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG RUBY_VERSION=3.0.7
+ARG RUBY_VERSION=3.1.7
 FROM ruby:${RUBY_VERSION}
 
 ARG BUNDLER_VERSION=

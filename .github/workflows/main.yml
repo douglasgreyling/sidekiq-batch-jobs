@@ -21,18 +21,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: rails-6.1
-            gemfile: rails_6.1
+          - lane: rails-7.2
+            gemfile: rails_7.2
+            # Ruby 3.1 caps nokogiri at 1.18, which has advisories with no
+            # version to move to. Test-only, via actionview. See the README.
             audit_soft_fail: true
-            ruby: "3.0.7"
-            bundler: "2.4.22"
-          - lane: rails-7.1
-            gemfile: rails_7.1
-            audit_soft_fail: true
-            ruby: "3.0.7"
-            bundler: "2.4.22"
+            ruby: "3.1.7"
+            bundler: "2.5.23"
           - lane: rails-8.0
             gemfile: rails_8.0
+            audit_soft_fail: false
+            ruby: "3.4.6"
+            bundler: "4.0.19"
+          - lane: rails-8.1
+            gemfile: rails_8.1
             audit_soft_fail: false
             ruby: "3.4.6"
             bundler: "4.0.19"

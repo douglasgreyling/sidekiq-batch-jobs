@@ -2,16 +2,10 @@
 
 ENV["RAILS_ENV"] ||= "test"
 
-# concurrent-ruby 1.3.5 dropped its implicit `require "logger"`, which Rails
-# < 7.1 relied on. Without this, booting Rails 6.1 dies on `uninitialized
-# constant ActiveSupport::LoggerThreadSafeLevel::Logger`. Drop it once the
-# minimum supported Rails is 7.1.
-require "logger"
-
 require "combustion"
 
 Combustion.path = "spec/internal"
-Combustion.initialize! :active_record do
+Combustion.initialize! :active_record, :active_job do
   config.load_defaults Rails::VERSION::STRING.to_f
 end
 
