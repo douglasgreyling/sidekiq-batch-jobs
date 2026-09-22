@@ -22,8 +22,6 @@
 #  updated_at        :datetime         not null
 #
 class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
-  extend ::Sidekiq::Batch::Jobs::EnumCompat
-
   # `complete` fires whatever the outcome; `success` and `failure` name it.
   # Three rather than two, so "always do X, and separately alert on failure"
   # needs no duplicate registration. Same vocabulary as Sidekiq Pro.
@@ -34,7 +32,11 @@ class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
   # `succeeded`, not `complete`: `:complete` is the event that fires whatever
   # the outcome, so a status of that name would mean the opposite of the event
   # firing beside it.
-  status_enum(pending: 0, running: 1, succeeded: 2, failed: 3)
+  #
+  # Positional, with `suffix:`, because ActiveRecord 8 accepts no other form.
+  # The suffix is what keeps `failed_status?` clear of the `failure` callback
+  # vocabulary sitting beside it.
+  enum :status, { pending: 0, running: 1, succeeded: 2, failed: 3 }, suffix: :status
 
   has_many :sidekiq_batch_jobs, dependent: :delete_all
 

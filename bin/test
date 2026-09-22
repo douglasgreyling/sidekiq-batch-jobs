@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Run the suite in one of the Appraisal lanes (see Appraisals).
 #
-#   bin/test                     rails-6.1, the extraction target (default)
+#   bin/test                     rails-7.2, the floor (default)
 #   bin/test spec/models         args pass through to rspec
-#   bin/test --lane rails-7.1    Rails 7.1, same Ruby 3.0 image
 #   bin/test --lane rails-8.0    Rails 8.0, needs the Ruby 3.4 image
+#   bin/test --lane rails-8.1    Rails 8.1, same image
 #   bin/test --all               every lane, in order
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-LANES=(rails-6.1 rails-7.1 rails-8.0)
-lane="${LANE:-rails-6.1}"
+LANES=(rails-7.2 rails-8.0 rails-8.1)
+lane="${LANE:-rails-7.2}"
 
 case "${1:-}" in
   --lane) lane="$2"; shift 2 ;;
@@ -28,11 +28,12 @@ case "${1:-}" in
     ;;
 esac
 
-# Rails 8 and Sidekiq 8 both need Ruby >= 3.2, so that lane runs on the second
-# image. Everything else runs on the Ruby 3.0.7 one.
+# Rails 8 and Sidekiq 8 both need Ruby >= 3.2, so those lanes run on the second
+# image. rails-7.2 runs on the Ruby 3.1.7 one, which is the floor it exists to
+# prove.
 case "$lane" in
-  rails-8.0) service="gem-ruby34" ;;
-  *)         service="gem" ;;
+  rails-8.0 | rails-8.1) service="gem-ruby34" ;;
+  *)                     service="gem" ;;
 esac
 
 gemfile="/gem/gemfiles/${lane//-/_}.gemfile"

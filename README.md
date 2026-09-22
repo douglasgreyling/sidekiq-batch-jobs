@@ -4,7 +4,7 @@ Batch tracking and completion callbacks for Sidekiq, backed by ActiveRecord (Pos
 
 A hand-rolled alternative to Sidekiq Pro batches. Group a set of `perform_async` calls into a batch, persist their state in the database, and fire callback workers when the batch finishes. You decide what counts as a failure: one bad job, all of them, or some tolerance in between.
 
-Tested against Ruby 3.0–3.4, Rails 6.1–8.0, Sidekiq 7–8.
+Tested against Ruby 3.1–3.4, Rails 7.2–8.1, Sidekiq 7–8.
 
 ## Contents
 
@@ -545,14 +545,14 @@ Run `bin/setup` again whenever the `Dockerfile`, the `Gemfile` or `Appraisals` c
 ### Running things
 
 ```bash
-bin/test                                        # rails-6.1, the default lane
+bin/test                                        # rails-7.2, the default lane
 bin/test spec/models                            # arguments pass through to rspec
 bin/test spec/models/sidekiq_batch_spec.rb:42   # including a single example
-bin/test --lane rails-8.0                       # one specific lane
+bin/test --lane rails-8.1                       # one specific lane
 bin/test --all                                  # every lane, in order
 
 bin/shell                                       # interactive shell in the default lane
-bin/shell rails-8.0                             # or in another one
+bin/shell rails-8.1                             # or in another one
 ```
 
 Rake tasks run inside a lane rather than on your host, so reach them through `bin/shell`:
@@ -565,28 +565,27 @@ bundle exec rake audit      # this lane's lockfile against the ruby-advisory-db
 
 `audit` sits outside the default task because it needs network access.
 
-> **Expect advisories on the older lanes.** The `rails-6.1` and `rails-7.1` lockfiles already
-> hold the newest release in those series (6.1.7.10, 7.1.6), and both series are past security
-> support, so roughly 20 advisories each have no version to move to. nokogiri is stuck for the
-> same reason: 1.18+ requires Ruby >= 3.1. CI audits every lane but only *fails* on `rails-8.0`,
-> which is clean. Green CI does not mean "no known advisories on Rails 6.1".
+> **Expect nokogiri advisories on `rails-7.2`.** That lane runs Ruby 3.1, and nokogiri 1.19
+> requires 3.2, so it is held at 1.18.10 with advisories that have no version to move to.
+> nokogiri arrives through actionview and is test-only: the gem declares no runtime dependency
+> on it, so none of this reaches a host application. CI audits every lane but only *fails* on
+> `rails-8.0` and `rails-8.1`, both of which are clean.
 
 ### The three lanes
 
 | Lane | Ruby | Rails | Sidekiq | Why it exists |
 | --- | --- | --- | --- | --- |
-| `rails-6.1` | 3.0.7 | 6.1.7 | 7.3.10 | The app this gem was extracted from |
-| `rails-7.1` | 3.0.7 | 7.1 | 7.3 | Exercises `EnumCompat`'s `>= 7` branch |
-| `rails-8.0` | 3.4.6 | 8.0 | 8.x | ActiveRecord 8 removed the hash form of `enum` |
+| `rails-7.2` | 3.1.7 | 7.2 | 7.3 | The floor: oldest supported Rails, Ruby and Sidekiq |
+| `rails-8.0` | 3.4.6 | 8.0 | 8.0 | ActiveRecord 8 removed the hash form of `enum` |
+| `rails-8.1` | 3.4.6 | 8.1 | 8.1 | The newest supported pairing, and the `< 9` ceiling |
 
-`rails-6.1` and `rails-8.0` are the two that matter most. No single lane can cover both
-branches of the `enum` shim, because 6.1 accepts only the hash form and 8.0 only the
-positional one.
+`rails-7.2` is the one carrying the most weight. It is the only lane running Ruby 3.1 and the
+only lane running Sidekiq 7, so it alone proves the bottom of both declared ranges.
 
 **Two images, and Ruby is why.** Appraisal varies gem versions; it cannot vary Ruby. Rails 8
-and Sidekiq 8 both require Ruby >= 3.2, so `rails-8.0` cannot run on the Ruby 3.0.7 image that
-matches the extraction target. `docker-compose.yml` pairs each lane with a Ruby that can run
-it, and CI mirrors that pairing.
+and Sidekiq 8 both require Ruby >= 3.2, so neither 8 lane can run on the Ruby 3.1.7 image that
+`rails-7.2` needs. `docker-compose.yml` pairs each lane with a Ruby that can run it, and CI
+mirrors that pairing.
 
 Postgres and Redis come up through compose and are gated on healthchecks, so there is no wait
 loop to care about. Postgres data is on tmpfs, so `docker compose down` any time. The suite

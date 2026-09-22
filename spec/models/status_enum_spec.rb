@@ -2,17 +2,12 @@
 
 require "spec_helper"
 
-# The `enum` call this shim wraps is the single most version-fragile line in the
-# gem: Rails 6.1 accepts only the hash form, Rails 8.0 only the positional one.
-# These examples assert the surface both branches must produce, so whichever
-# Rails the container is pinned to, a regression shows up here rather than as a
-# confusing failure somewhere downstream.
-RSpec.describe Sidekiq::Batch::Jobs::EnumCompat do
-  it "is extended by both models" do
-    expect(SidekiqBatch.singleton_class).to include(described_class)
-    expect(SidekiqBatchJob.singleton_class).to include(described_class)
-  end
-
+# The `enum` call on each model is the most version-fragile line in the gem:
+# its signature moved twice inside the range Rails has shipped, and ActiveRecord
+# 8 dropped the hash form that 6.1 required. These examples pin the surface that
+# call has to produce, so a Rails upgrade that changes it again shows up here
+# rather than as a confusing failure somewhere downstream.
+RSpec.describe "the status enum" do
   describe "SidekiqBatch" do
     it "maps every status to its column value" do
       expect(SidekiqBatch.statuses).to eq(
