@@ -87,6 +87,30 @@ RSpec.describe SidekiqBatch, type: :model do
       expect { batch.on(:wat, "X") }.to raise_error(ArgumentError, /unknown event/)
     end
 
+    it "accepts an ActiveJob class" do
+      batch.on(:complete, SidekiqBatchTestActiveJobCallback)
+
+      expect(batch.reload.callbacks).to eq("complete" => "SidekiqBatchTestActiveJobCallback")
+    end
+
+    # Caught here rather than at announcement time, where it costs an alert on
+    # every reaper run until the batch is groomed away.
+    it "raises for a class nothing can enqueue" do
+      expect { batch.on(:complete, SidekiqBatchUnenqueueableCallback) }
+        .to raise_error(ArgumentError, /cannot be a batch callback/)
+
+      expect(batch.reload.callbacks).to be_empty
+    end
+
+    # A name that does not resolve is not necessarily wrong: in a host
+    # application it may simply not be autoloaded at this point, and the
+    # announcement resolves it again when it fires.
+    it "leaves a name it cannot resolve alone" do
+      batch.on(:complete, "NotLoadedYetWorker")
+
+      expect(batch.reload.callbacks).to eq("complete" => "NotLoadedYetWorker")
+    end
+
     it "accepts registration while the batch is still running" do
       running = create(:sidekiq_batch, :running)
 
@@ -347,6 +371,21 @@ RSpec.describe SidekiqBatch, type: :model do
   end
 
   describe "#fire_callbacks" do
+    # The whole point of supporting ActiveJob callbacks: registering one and
+    # finishing the batch has to put a real job on a real queue.
+    it "enqueues an ActiveJob callback through Sidekiq's wrapper" do
+      batch = create(:sidekiq_batch, :running, total_jobs: 1)
+      batch.on(:complete, SidekiqBatchTestActiveJobCallback)
+      create(:sidekiq_batch_job, :complete, sidekiq_batch: batch)
+
+      expect(batch.attempt_completion!).to eq("succeeded")
+
+      payload = Sidekiq::Queues["callbacks"].last
+
+      expect(payload["wrapped"]).to eq("SidekiqBatchTestActiveJobCallback")
+      expect(payload.dig("args", 0, "arguments")).to eq([batch.id])
+    end
+
     # Terminal, because that is the only state with an outcome to announce —
     # both internal callers arrive here having just transitioned the batch.
     let(:batch) { create(:sidekiq_batch, :with_complete_callback, status: "succeeded", completed_at: Time.current) }

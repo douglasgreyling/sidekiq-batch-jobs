@@ -10,6 +10,7 @@ gemspec
 # constraint can span it: shoulda-matchers 6.x needs Ruby >= 3.0.5, 7.x needs
 # >= 3.2 and 8.x needs >= 3.3. Floors let bundler resolve the right version for
 # whichever Ruby a lane runs on.
+gem "activejob", ">= 7.2"
 gem "combustion", ">= 1.4"
 gem "concurrent-ruby", ">= 1.2"
 gem "database_cleaner-active_record", ">= 2.2"

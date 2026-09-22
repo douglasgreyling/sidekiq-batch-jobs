@@ -92,6 +92,8 @@ class SidekiqBatch < ::Sidekiq::Batch::Jobs.base_class
             "cannot register a #{event_str} callback on a batch that has already finished (#{status})"
     end
 
+    CallbackTarget.validate!(job_class)
+
     self.callbacks = callbacks.merge(event_str => job_class.to_s)
 
     save!

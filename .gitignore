@@ -5,7 +5,10 @@
 /doc/
 /pkg/
 /spec/reports/
-/spec/internal/log/*.log
+# Everything the suite writes here, including rotated logs: `*.log` alone
+# misses test.log.0, which reaches 100MB and is rejected by GitHub.
+/spec/internal/log/*
+!/spec/internal/log/.gitkeep
 /spec/internal/tmp/
 /tmp/
 

@@ -29,6 +29,26 @@ shim that the new floor makes dead.
 
 - A `rails-8.1` lane, so the newest Rails series is actually covered rather than merely
   permitted by the `< 9` ceiling.
+- **Callbacks may now be ActiveJob classes.** `batch.on(:complete, SomeApplicationJob)` works
+  alongside the Sidekiq workers that were previously the only option. In an application that is
+  otherwise all ActiveJob, reaching for `ApplicationJob` was the natural move and the one thing
+  that did not work, silently: the announcement raised `NoMethodError` on `perform_async`, which
+  was swallowed into an alert that then repeated on every reaper run until grooming.
+
+  The payload is built and pushed directly rather than by calling `perform_later`, because
+  Sidekiq's ActiveJob adapter declares `enqueue_after_transaction_commit?` and would defer the
+  push until after the claim had committed. That would leave a claimed event with nothing sent
+  and nothing to retry it, since a spent claim is what stops the orphaned-callback reaper
+  looking again. The cost is that ActiveJob's enqueue callbacks do not run for batch callbacks.
+  `perform`, `around_perform` and `retry_on` are unaffected.
+- `require "sidekiq/batch/jobs/rspec"`, which is the test-suite wiring every host was writing by
+  hand. It sets the enrolment transaction baseline that transactional fixtures otherwise trip,
+  and registers the server middleware that `Sidekiq::Testing` never gets from `install!`. The
+  second is the one worth shipping: without it inline jobs run, nothing marks their rows
+  complete, and batches never finish, with nothing raised to say why. The gem's own suite now
+  uses this file rather than its own copy, so it cannot rot unnoticed.
+- `SidekiqBatch#on` rejects a class that can be neither `perform_async`ed nor `perform_later`ed,
+  naming both interfaces. Registration is where that is cheap to catch.
 
 ### Changed
 

@@ -5,7 +5,7 @@ ENV["RAILS_ENV"] ||= "test"
 require "combustion"
 
 Combustion.path = "spec/internal"
-Combustion.initialize! :active_record do
+Combustion.initialize! :active_record, :active_job do
   config.load_defaults Rails::VERSION::STRING.to_f
 end
 

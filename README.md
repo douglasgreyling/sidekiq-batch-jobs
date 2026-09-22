@@ -245,17 +245,30 @@ ordering. You just write the block.
 
 ### What a callback worker receives
 
-**A callback must be a plain Sidekiq worker, not an ActiveJob class.** Unlike the preference
-for enrolled jobs above, this one is a hard requirement. Callbacks are announced with
-`worker.perform_async(batch.id)`, and an `ApplicationJob` subclass does not respond to
-`perform_async`, so registering one raises `NoMethodError` inside the announcement.
+**A callback can be a Sidekiq worker or an ActiveJob class.** Either is fine, and an
+`ApplicationJob` subclass works exactly as you would expect:
 
-That failure does not reach you as an exception. The claim is rolled back, the reason goes to
-`config.on_alert`, and because the batch never records a `callback_fired_at` it stays in the
-orphaned-callback scope, so the reaper retries and alerts again on every run until grooming
-deletes the batch. The symptom is a callback that never arrives and an alert that repeats, not
-a crash. In a codebase that is otherwise all ActiveJob, reaching for `ApplicationJob` here is
-the natural move and the one thing that will not work.
+```ruby
+batch.on(:complete, RebuildLeaderboardCacheWorker)   # include Sidekiq::Job
+batch.on(:failure,  AlertOpsJob)                     # < ApplicationJob
+```
+
+Anything else is refused where you register it, rather than failing later:
+
+```ruby
+batch.on(:complete, SomePlainClass)
+# => ArgumentError: SomePlainClass cannot be a batch callback: it answers to neither
+#    `perform_async` (from `Sidekiq::Job`) nor `perform_later` (from `ActiveJob::Base`) ...
+```
+
+One caveat on ActiveJob callbacks. The gem builds the Sidekiq payload and pushes it itself
+rather than calling `perform_later`, because Sidekiq's ActiveJob adapter defers a
+`perform_later` until after the surrounding transaction commits, and the announcement has to
+enqueue inside the transaction that claims the event. Deferring it would let the claim commit
+with nothing sent, which nothing retries, because a spent claim is exactly what stops the
+reaper looking again. The consequence for you is that ActiveJob's **enqueue** callbacks
+(`before_enqueue` and friends) do not run for a batch callback. Everything after that point,
+including `perform`, `around_perform` and `retry_on`, is untouched.
 
 Every callback gets one argument: the batch id. From there it can inspect the batch's full state:
 
@@ -424,6 +437,18 @@ different from the event sitting right beside it.
 Batches do not finish by themselves in a test suite, and it is worth knowing why before you go
 looking for the bug.
 
+**Start with the shipped wiring.** One require covers both of the things below that every
+suite needs:
+
+```ruby
+# spec/rails_helper.rb
+require "sidekiq/batch/jobs/rspec"
+```
+
+That sets the enrolment transaction baseline around each example, and registers the server
+middleware that `Sidekiq::Testing` does not otherwise get. Both are explained below, because
+they are worth understanding and doing by hand is perfectly fine.
+
 **Transactional fixtures look exactly like a caller-opened transaction.** Rails turns
 `use_transactional_fixtures` on by default, which wraps every example in a transaction that is
 never committed. `jobs {}` refuses to run inside a transaction the caller opened, so in a
@@ -471,11 +496,16 @@ batch.attempt_completion!            # now it is `succeeded` and the callbacks a
 ```
 
 **In inline mode** jobs run at push time, but Sidekiq's inline path uses its own middleware
-chain, which is empty by default. Add this gem's middleware to it or nothing will be tracked:
+chain, which is empty by default. `install!` will not fill it for you, because it only adds
+the server middleware when `Sidekiq.server?` is true, which never happens under RSpec. Add it
+yourself, or take the require above, which does this:
 
 ```ruby
 Sidekiq::Testing.server_middleware { |chain| chain.add(SidekiqBatch::Middleware) }
 ```
+
+Without it nothing raises. Inline jobs run, no row is ever marked complete, and batches simply
+never finish, so callbacks never fire and the suite quietly proves nothing.
 
 Even then, an inline job runs *while the block is still open*, so anything it enqueues joins
 the batch. Fake mode avoids that entirely, which is why this gem's own suite uses it.

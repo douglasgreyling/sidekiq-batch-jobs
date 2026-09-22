@@ -78,7 +78,9 @@ class SidekiqBatch
       SidekiqBatch.transaction do
         next unless claim!(event)
 
-        worker.perform_async(batch.id)
+        # Inside the transaction on purpose: see CallbackTarget for why an
+        # ActiveJob callback cannot be sent with `perform_later`.
+        CallbackTarget.enqueue(worker, batch.id)
 
         fired = Fired.new(event: event, job_class: job_class_name)
       end
