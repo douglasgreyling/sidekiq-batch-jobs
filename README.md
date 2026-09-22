@@ -215,10 +215,47 @@ calls. Usually that is merely surprising. `retry_on` is worse: ActiveJob catches
 itself and queues a *new* job, so Sidekiq only ever sees the original succeed. The batch marks
 that row complete and can report success while the work is still failing and retrying.
 
+If you do enrol an ActiveJob, control its retries with `sidekiq_options` rather than
+`retry_on`, and the batch reads them correctly:
+
+```ruby
+class RescoreJob < ApplicationJob
+  # Read by Sidekiq, not by ActiveJob.
+  sidekiq_options retry: 5
+
+  def perform(entry_id)
+    Entry.find(entry_id).rescore!
+  end
+end
+
+batch.jobs { RescoreJob.perform_later(entry.id) }
+```
+
+The middleware decides whether a failure is a job's last attempt from `job["retry"]` in the
+Sidekiq payload, and Sidekiq's client merges the wrapped ActiveJob class's `sidekiq_options`
+into that payload as it is pushed. So `retry: 5` arrives as the Integer `5`, exactly as it
+would for a plain worker, and the row is only marked failed on the final attempt. `retry: false`
+arrives as `false` and means "no retries, so this attempt is the last one". Omitting
+`sidekiq_options` entirely gives `true`, which falls back to Sidekiq's configured `max_retries`
+(25 by default). All three are handled, and this holds across every Sidekiq version the gem
+supports.
+
 Beyond that you don't have to think about jid tracking, race conditions, or middleware
 ordering. You just write the block.
 
 ### What a callback worker receives
+
+**A callback must be a plain Sidekiq worker, not an ActiveJob class.** Unlike the preference
+for enrolled jobs above, this one is a hard requirement. Callbacks are announced with
+`worker.perform_async(batch.id)`, and an `ApplicationJob` subclass does not respond to
+`perform_async`, so registering one raises `NoMethodError` inside the announcement.
+
+That failure does not reach you as an exception. The claim is rolled back, the reason goes to
+`config.on_alert`, and because the batch never records a `callback_fired_at` it stays in the
+orphaned-callback scope, so the reaper retries and alerts again on every run until grooming
+deletes the batch. The symptom is a callback that never arrives and an alert that repeats, not
+a crash. In a codebase that is otherwise all ActiveJob, reaching for `ApplicationJob` here is
+the natural move and the one thing that will not work.
 
 Every callback gets one argument: the batch id. From there it can inspect the batch's full state:
 
@@ -386,6 +423,38 @@ different from the event sitting right beside it.
 
 Batches do not finish by themselves in a test suite, and it is worth knowing why before you go
 looking for the bug.
+
+**Transactional fixtures look exactly like a caller-opened transaction.** Rails turns
+`use_transactional_fixtures` on by default, which wraps every example in a transaction that is
+never committed. `jobs {}` refuses to run inside a transaction the caller opened, so in a
+standard suite every single call raises `TransactionError` before it enrols anything.
+
+Tell the guard which depth counts as "no transaction" rather than turning it off:
+
+```ruby
+# spec/rails_helper.rb
+RSpec.configure do |config|
+  config.before do
+    Thread.current[SidekiqBatch::BatchEnrollmentContext::TXN_BASELINE] =
+      ActiveRecord::Base.connection.open_transactions
+  end
+
+  config.after do
+    Thread.current[SidekiqBatch::BatchEnrollmentContext::TXN_BASELINE] = nil
+  end
+end
+```
+
+Recording the depth keeps the guard doing its job: a transaction your test opens *on top of*
+the fixture one still raises, which is the case actually worth catching. Clearing it afterwards
+stops a stale baseline from hiding a real transaction in a later example. This gem's own suite
+does exactly this, in `spec/support/sidekiq_batch.rb`. Minitest wraps examples the same way, so
+the same pair works from `setup` and `teardown`.
+
+The guard is not arbitrary: enrolment rows have to be committed before their jobs reach Redis,
+or a worker can start before its row is visible, and a rollback can discard the row for a job
+that is already running. Disabling the check instead of baselining it gives up that guarantee
+in the suite that is meant to be proving it.
 
 **In fake mode** (Sidekiq's default) pushed jobs go into an array instead of running, so the
 enrollment rows stay `pending` and the batch stays `running`. That is usually what you want:
