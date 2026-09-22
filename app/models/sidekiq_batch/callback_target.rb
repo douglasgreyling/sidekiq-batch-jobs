@@ -64,7 +64,21 @@ class SidekiqBatch
       # The adapter is what supplies the wrapper the payload is pushed as, so
       # without it an ActiveJob cannot be delivered through Sidekiq at all.
       def active_job?(job_class)
-        job_class.respond_to?(:perform_later) && defined?(::Sidekiq::ActiveJob::Wrapper)
+        job_class.respond_to?(:perform_later) && !active_job_wrapper.nil?
+      end
+
+      # The wrapper the host's own adapter would use, rather than a second one
+      # that merely happens to work. Rails ships a SidekiqAdapter of its own,
+      # and Sidekiq replaces it from 8.0, aliasing `JobWrapper` to its version.
+      # On Rails 7.2 with Sidekiq 7.3 the two are different classes, so reading
+      # it through the adapter is what keeps the payload identical to the one
+      # `perform_later` would have pushed on whichever pairing the host runs.
+      def active_job_wrapper
+        if defined?(::ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper)
+          ::ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper
+        elsif defined?(::Sidekiq::ActiveJob::Wrapper)
+          ::Sidekiq::ActiveJob::Wrapper
+        end
       end
 
       # Deliberately not `perform_later`.
@@ -86,7 +100,7 @@ class SidekiqBatch
         job = job_class.new(batch_id)
 
         ::Sidekiq::Client.push(
-          "class"   => ::Sidekiq::ActiveJob::Wrapper,
+          "class"   => active_job_wrapper,
           "wrapped" => job_class,
           "queue"   => job.queue_name,
           "args"    => [job.serialize]

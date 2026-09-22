@@ -35,6 +35,24 @@ class SidekiqBatchTestActiveJobCallback < ActiveJob::Base
   end
 end
 
+# Enrolled ActiveJobs, for the retry accounting the middleware does. Their
+# `sidekiq_options` is read by Sidekiq's client rather than by ActiveJob, so
+# the only honest way to test it is to push one and use the payload that
+# actually came out.
+class SidekiqBatchTestNoRetryActiveJob < ActiveJob::Base
+  queue_as :enrolled
+  sidekiq_options retry: 0
+
+  def perform(*); end
+end
+
+class SidekiqBatchTestRetryingActiveJob < ActiveJob::Base
+  queue_as :enrolled
+  sidekiq_options retry: 2
+
+  def perform(*); end
+end
+
 # Neither a Sidekiq worker nor an ActiveJob, so nothing can enqueue it.
 class SidekiqBatchUnenqueueableCallback
   def perform(batch_id); end

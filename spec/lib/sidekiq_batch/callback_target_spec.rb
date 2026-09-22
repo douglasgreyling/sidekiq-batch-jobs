@@ -35,7 +35,9 @@ RSpec.describe SidekiqBatch::CallbackTarget do
 
       payload = Sidekiq::Queues["callbacks"].last
 
-      expect(payload["class"]).to eq("Sidekiq::ActiveJob::Wrapper")
+      # Named through the adapter, because Rails 7.2 and Sidekiq 7.3 disagree
+      # with Sidekiq 8 about which class that is.
+      expect(payload["class"]).to eq(ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper.name)
       expect(payload["wrapped"]).to eq("SidekiqBatchTestActiveJobCallback")
       expect(payload.dig("args", 0, "arguments")).to eq([7])
     end

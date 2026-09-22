@@ -26,6 +26,57 @@ RSpec.describe SidekiqBatch::Middleware do
     hash
   end
 
+  # `sidekiq_options` on an ActiveJob class is merged into the payload by
+  # Sidekiq's client, not by ActiveJob, so `final_attempt?` reading
+  # `job["retry"]` works through ActiveJob for a reason that is not obvious
+  # from either side. These push a real job and run the payload it produced,
+  # rather than a hand-built hash, since a hand-built hash would prove nothing
+  # about the wiring.
+  describe "retry accounting for an enrolled ActiveJob" do
+    def enrol(job_class)
+      batch = create(:sidekiq_batch)
+      batch.jobs { job_class.perform_later(1) }
+
+      [batch, Sidekiq::Queues["enrolled"].last]
+    end
+
+    def run_and_fail(payload)
+      expect do
+        middleware.call(Sidekiq::ActiveJob::Wrapper.new, payload, "enrolled") { raise "boom" }
+      end.to raise_error("boom")
+    end
+
+    it "carries sidekiq_options through to the payload" do
+      _batch, payload = enrol(SidekiqBatchTestRetryingActiveJob)
+
+      expect(payload["retry"]).to eq(2)
+    end
+
+    it "fails the row on the first failure when the job declared retry: 0" do
+      batch, payload = enrol(SidekiqBatchTestNoRetryActiveJob)
+
+      run_and_fail(payload)
+
+      expect(batch.sidekiq_batch_jobs.first.reload).to be_failed_status
+    end
+
+    it "leaves the row pending while retries remain" do
+      batch, payload = enrol(SidekiqBatchTestRetryingActiveJob)
+
+      run_and_fail(payload.merge("retry_count" => 0))
+
+      expect(batch.sidekiq_batch_jobs.first.reload).to be_pending_status
+    end
+
+    it "fails the row once the declared retries are spent" do
+      batch, payload = enrol(SidekiqBatchTestRetryingActiveJob)
+
+      run_and_fail(payload.merge("retry_count" => 1))
+
+      expect(batch.sidekiq_batch_jobs.first.reload).to be_failed_status
+    end
+  end
+
   describe "#call" do
     context "for an untracked job (no batch id in the payload)" do
       it "yields and is a no-op" do
