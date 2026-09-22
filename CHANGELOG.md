@@ -5,6 +5,58 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-22
+
+A support-window release. No behaviour changes, no schema change, and no API change beyond one
+shim that the new floor makes dead.
+
+### Breaking
+
+- **Rails 6.1, 7.0 and 7.1 are no longer supported.** The gemspec now requires
+  `activerecord >= 7.2, < 9`. Nothing in the gem stopped working on those versions, they are
+  simply no longer tested against, and with 8.1 shipped they are all past Rails' own security
+  support. Stay on 0.3.1 if you need them; it is unaffected by this release.
+- **Ruby 3.0 is out, and the floor is 3.1.** Not our choice to make: Rails 7.2 requires
+  Ruby >= 3.1, so supporting one sets the other.
+- **`Sidekiq::Batch::Jobs::EnumCompat` is gone.** It existed only to bridge Rails 6.1's
+  hash-form `enum` against the positional form 7.0 introduced, and with 7.2 as the floor every
+  supported Rails takes the same branch. The models now call `enum` directly. Nothing
+  downstream changes, because the generated surface is identical: `.statuses`, the
+  `pending_status?` predicates and the `pending_status` scopes are all still there. Only a host
+  that referenced the module by name is affected, which it had no reason to.
+
+### Added
+
+- A `rails-8.1` lane, so the newest Rails series is actually covered rather than merely
+  permitted by the `< 9` ceiling.
+
+### Changed
+
+- The lanes are now `rails-7.2` (Ruby 3.1.7, Sidekiq 7.3), `rails-8.0` and `rails-8.1` (both
+  Ruby 3.4.6, Sidekiq 8). `rails-7.2` carries the most weight: it is the only lane on Ruby 3.1
+  and the only one on Sidekiq 7, so it alone proves the bottom of both declared ranges.
+- The development image moved from Ruby 3.0.7 to 3.1.7, which also moves its base from Debian
+  bullseye to bookworm. Worth knowing because the bullseye apt mirror had begun 404ing on
+  `git`, which left `bin/setup` and `bin/test` unable to build an image at all. Both work
+  again.
+- `rake audit` now hard-fails on both Rails 8 lanes, where before only one lane was held to
+  that. `rails-7.2` still soft-fails, for a reason that has nothing to do with Rails: it runs
+  Ruby 3.1, which caps nokogiri at 1.18.10 because 1.19 requires 3.2, and those advisories have
+  no version to move to. nokogiri is test-only, reaching the lockfile through actionview, so
+  the gem declares no runtime dependency on it and nothing reaches a host application.
+- Development dependencies now cap `json` below 3.0. The September 2026 release dropped the
+  `quirks_mode` keyword from `generate` and changed `parse`'s arity, which breaks every Rails
+  series this gem supports. Deliberately in the Gemfile rather than the gemspec: it is Rails'
+  incompatibility to resolve, and capping a host application's json for them would be
+  overreach.
+
+### Upgrading from 0.3.1
+
+Nothing to run. On Rails 7.2+ and Ruby 3.1+, `bundle update sidekiq-batch-jobs` is the whole
+upgrade: no migration, no configuration change, no API change.
+
+On Rails 7.1 or older, Bundler will simply decline the upgrade and leave you on 0.3.1.
+
 ## [0.3.1] - 2026-09-08
 
 ### Fixed

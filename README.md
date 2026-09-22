@@ -4,7 +4,7 @@ Batch tracking and completion callbacks for Sidekiq, backed by ActiveRecord (Pos
 
 A hand-rolled alternative to Sidekiq Pro batches. Group a set of `perform_async` calls into a batch, persist their state in the database, and fire callback workers when the batch finishes. You decide what counts as a failure: one bad job, all of them, or some tolerance in between.
 
-Tested against Ruby 3.0–3.4, Rails 6.1–8.0, Sidekiq 7–8.
+Tested against Ruby 3.1–3.4, Rails 7.2–8.1, Sidekiq 7–8.
 
 ## Contents
 
@@ -215,10 +215,47 @@ calls. Usually that is merely surprising. `retry_on` is worse: ActiveJob catches
 itself and queues a *new* job, so Sidekiq only ever sees the original succeed. The batch marks
 that row complete and can report success while the work is still failing and retrying.
 
+If you do enrol an ActiveJob, control its retries with `sidekiq_options` rather than
+`retry_on`, and the batch reads them correctly:
+
+```ruby
+class RescoreJob < ApplicationJob
+  # Read by Sidekiq, not by ActiveJob.
+  sidekiq_options retry: 5
+
+  def perform(entry_id)
+    Entry.find(entry_id).rescore!
+  end
+end
+
+batch.jobs { RescoreJob.perform_later(entry.id) }
+```
+
+The middleware decides whether a failure is a job's last attempt from `job["retry"]` in the
+Sidekiq payload, and Sidekiq's client merges the wrapped ActiveJob class's `sidekiq_options`
+into that payload as it is pushed. So `retry: 5` arrives as the Integer `5`, exactly as it
+would for a plain worker, and the row is only marked failed on the final attempt. `retry: false`
+arrives as `false` and means "no retries, so this attempt is the last one". Omitting
+`sidekiq_options` entirely gives `true`, which falls back to Sidekiq's configured `max_retries`
+(25 by default). All three are handled, and this holds across every Sidekiq version the gem
+supports.
+
 Beyond that you don't have to think about jid tracking, race conditions, or middleware
 ordering. You just write the block.
 
 ### What a callback worker receives
+
+**A callback must be a plain Sidekiq worker, not an ActiveJob class.** Unlike the preference
+for enrolled jobs above, this one is a hard requirement. Callbacks are announced with
+`worker.perform_async(batch.id)`, and an `ApplicationJob` subclass does not respond to
+`perform_async`, so registering one raises `NoMethodError` inside the announcement.
+
+That failure does not reach you as an exception. The claim is rolled back, the reason goes to
+`config.on_alert`, and because the batch never records a `callback_fired_at` it stays in the
+orphaned-callback scope, so the reaper retries and alerts again on every run until grooming
+deletes the batch. The symptom is a callback that never arrives and an alert that repeats, not
+a crash. In a codebase that is otherwise all ActiveJob, reaching for `ApplicationJob` here is
+the natural move and the one thing that will not work.
 
 Every callback gets one argument: the batch id. From there it can inspect the batch's full state:
 
@@ -387,6 +424,38 @@ different from the event sitting right beside it.
 Batches do not finish by themselves in a test suite, and it is worth knowing why before you go
 looking for the bug.
 
+**Transactional fixtures look exactly like a caller-opened transaction.** Rails turns
+`use_transactional_fixtures` on by default, which wraps every example in a transaction that is
+never committed. `jobs {}` refuses to run inside a transaction the caller opened, so in a
+standard suite every single call raises `TransactionError` before it enrols anything.
+
+Tell the guard which depth counts as "no transaction" rather than turning it off:
+
+```ruby
+# spec/rails_helper.rb
+RSpec.configure do |config|
+  config.before do
+    Thread.current[SidekiqBatch::BatchEnrollmentContext::TXN_BASELINE] =
+      ActiveRecord::Base.connection.open_transactions
+  end
+
+  config.after do
+    Thread.current[SidekiqBatch::BatchEnrollmentContext::TXN_BASELINE] = nil
+  end
+end
+```
+
+Recording the depth keeps the guard doing its job: a transaction your test opens *on top of*
+the fixture one still raises, which is the case actually worth catching. Clearing it afterwards
+stops a stale baseline from hiding a real transaction in a later example. This gem's own suite
+does exactly this, in `spec/support/sidekiq_batch.rb`. Minitest wraps examples the same way, so
+the same pair works from `setup` and `teardown`.
+
+The guard is not arbitrary: enrolment rows have to be committed before their jobs reach Redis,
+or a worker can start before its row is visible, and a rollback can discard the row for a job
+that is already running. Disabling the check instead of baselining it gives up that guarantee
+in the suite that is meant to be proving it.
+
 **In fake mode** (Sidekiq's default) pushed jobs go into an array instead of running, so the
 enrollment rows stay `pending` and the batch stays `running`. That is usually what you want:
 assert on `batch.total_jobs` and the rows, then drive the outcome yourself.
@@ -545,14 +614,14 @@ Run `bin/setup` again whenever the `Dockerfile`, the `Gemfile` or `Appraisals` c
 ### Running things
 
 ```bash
-bin/test                                        # rails-6.1, the default lane
+bin/test                                        # rails-7.2, the default lane
 bin/test spec/models                            # arguments pass through to rspec
 bin/test spec/models/sidekiq_batch_spec.rb:42   # including a single example
-bin/test --lane rails-8.0                       # one specific lane
+bin/test --lane rails-8.1                       # one specific lane
 bin/test --all                                  # every lane, in order
 
 bin/shell                                       # interactive shell in the default lane
-bin/shell rails-8.0                             # or in another one
+bin/shell rails-8.1                             # or in another one
 ```
 
 Rake tasks run inside a lane rather than on your host, so reach them through `bin/shell`:
@@ -565,28 +634,27 @@ bundle exec rake audit      # this lane's lockfile against the ruby-advisory-db
 
 `audit` sits outside the default task because it needs network access.
 
-> **Expect advisories on the older lanes.** The `rails-6.1` and `rails-7.1` lockfiles already
-> hold the newest release in those series (6.1.7.10, 7.1.6), and both series are past security
-> support, so roughly 20 advisories each have no version to move to. nokogiri is stuck for the
-> same reason: 1.18+ requires Ruby >= 3.1. CI audits every lane but only *fails* on `rails-8.0`,
-> which is clean. Green CI does not mean "no known advisories on Rails 6.1".
+> **Expect nokogiri advisories on `rails-7.2`.** That lane runs Ruby 3.1, and nokogiri 1.19
+> requires 3.2, so it is held at 1.18.10 with advisories that have no version to move to.
+> nokogiri arrives through actionview and is test-only: the gem declares no runtime dependency
+> on it, so none of this reaches a host application. CI audits every lane but only *fails* on
+> `rails-8.0` and `rails-8.1`, both of which are clean.
 
 ### The three lanes
 
 | Lane | Ruby | Rails | Sidekiq | Why it exists |
 | --- | --- | --- | --- | --- |
-| `rails-6.1` | 3.0.7 | 6.1.7 | 7.3.10 | The app this gem was extracted from |
-| `rails-7.1` | 3.0.7 | 7.1 | 7.3 | Exercises `EnumCompat`'s `>= 7` branch |
-| `rails-8.0` | 3.4.6 | 8.0 | 8.x | ActiveRecord 8 removed the hash form of `enum` |
+| `rails-7.2` | 3.1.7 | 7.2 | 7.3 | The floor: oldest supported Rails, Ruby and Sidekiq |
+| `rails-8.0` | 3.4.6 | 8.0 | 8.0 | ActiveRecord 8 removed the hash form of `enum` |
+| `rails-8.1` | 3.4.6 | 8.1 | 8.1 | The newest supported pairing, and the `< 9` ceiling |
 
-`rails-6.1` and `rails-8.0` are the two that matter most. No single lane can cover both
-branches of the `enum` shim, because 6.1 accepts only the hash form and 8.0 only the
-positional one.
+`rails-7.2` is the one carrying the most weight. It is the only lane running Ruby 3.1 and the
+only lane running Sidekiq 7, so it alone proves the bottom of both declared ranges.
 
 **Two images, and Ruby is why.** Appraisal varies gem versions; it cannot vary Ruby. Rails 8
-and Sidekiq 8 both require Ruby >= 3.2, so `rails-8.0` cannot run on the Ruby 3.0.7 image that
-matches the extraction target. `docker-compose.yml` pairs each lane with a Ruby that can run
-it, and CI mirrors that pairing.
+and Sidekiq 8 both require Ruby >= 3.2, so neither 8 lane can run on the Ruby 3.1.7 image that
+`rails-7.2` needs. `docker-compose.yml` pairs each lane with a Ruby that can run it, and CI
+mirrors that pairing.
 
 Postgres and Redis come up through compose and are gated on healthchecks, so there is no wait
 loop to care about. Postgres data is on tmpfs, so `docker compose down` any time. The suite
