@@ -7,8 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-09-22
 
-A support-window release. No behaviour changes, no schema change, and no API change beyond one
-shim that the new floor makes dead.
+Moves the supported Rails and Ruby window forward, and closes two footguns found by
+integrating the gem into a real application. No schema change, so nothing to migrate.
 
 ### Breaking
 
